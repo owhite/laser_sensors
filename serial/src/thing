@@ -1,0 +1,24 @@
+    case WRITE_DEVICE:
+      inBuffer[POS_RESPONSE] = order_received;
+      inBuffer[POS_RESPONSE + 1] = '>'; 
+      packetLen = 3;
+      device = inBuffer[POS_DEVICE_ADDRESS];
+      cmd    = inBuffer[POS_DEVICE_SEND1];
+
+      i = 0;
+      while (inBuffer[idx] != '>') {
+	sendBuffer[idx] = inBuffer[POS_DEVICE_SEND1 + i];
+	i++;
+      }
+
+      break;
+    case READ_DEVICE: 
+      inBuffer[POS_RESPONSE] = order_received;
+      device = inBuffer[POS_DEVICE_ADDRESS];
+      for (i = 0; i < 4; i++) {
+	inBuffer[POS_DEVICE_ADDRESS + i + 1] = i;
+      }
+      packetLen += i;
+      inBuffer[POS_DEVICE_ADDRESS + i + 1] = '>'; 
+
+      break;

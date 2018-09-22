@@ -1,0 +1,166 @@
+#define DEBUG false
+#define SERIAL_BAUD 115200
+
+#define HELLO             1
+#define ALREADY_CONNECTED 2
+#define SHUTDOWN          3
+#define WRITE_DEVICE      4
+#define READ_DEVICE       5
+#define ERROR             6
+
+#define POS_CMD            1
+#define POS_RESPONSE       2
+#define POS_DEVICE_ADDRESS 3
+#define POS_DEVICE_SEND1   4
+#define POS_DEVICE_SEND2   5
+
+const uint8_t numChars = 24;
+char inBuffer[numChars];
+boolean newData = false;
+
+uint8_t order_received;
+bool is_connected = false; 
+int8_t device = 0;
+int8_t input_len = 0;
+int32_t myWord = 0;
+
+unsigned long startTime;
+int8_t device_list[] = {0x0B, 0x0C, 0x0D};
+int8_t device_num = 3;
+
+void setup() {
+  // Init Serial
+  Serial.begin(SERIAL_BAUD);
+
+}
+
+void loop() {
+  recvString();
+  
+  // processMsgsSerial();
+
+  // sendString();
+}
+
+void sendString() {
+  if (inBuffer[0] != 0) { 
+    Serial.print("\n start \n");
+    uint8_t i;
+    while(i < numChars) {
+      uint8_t rc =  inBuffer[i];
+      Serial.printf("%d :: %d\n", i, rc);
+      if (rc == '\0') break;
+      i++;
+    }
+    Serial.print("\ndone\n");
+  }
+}
+
+void recvString() {
+  static boolean recvInProgress = false;
+  static byte ndx = 0;
+  char startMarker = '<';
+  char endMarker = '>';
+  char rc;
+ 
+  inBuffer[0] = 0;
+
+  while(Serial.available() > 0) {
+    if(ndx < numChars - 1) {
+      char inChar = Serial.read(); 
+      inBuffer[ndx] = inChar;
+      ndx++; 
+      inBuffer[ndx] = '\0'; 
+    }
+  }
+
+  if (inBuffer[0] != 0) { Serial.println("got something");}
+}
+
+void processMsgsSerial() {
+
+  order_received =  inBuffer[POS_CMD];
+
+  inBuffer[POS_RESPONSE + 1] = '>'; // set an initial close to the string
+
+  switch(order_received) {
+  case HELLO: 
+    // until master sends hello, dont proceed
+    if(!is_connected) { 
+      is_connected = true;
+      inBuffer[POS_RESPONSE] = HELLO;
+    }
+    else {
+      // already connected dont send "hello", avoid infinite loop
+      inBuffer[POS_RESPONSE] = ALREADY_CONNECTED;
+    }
+    break;
+  case ALREADY_CONNECTED: 
+      inBuffer[POS_RESPONSE] = order_received;
+    break;
+  case SHUTDOWN: 
+    inBuffer[POS_RESPONSE] = order_received;
+    break;
+  case WRITE_DEVICE:
+    inBuffer[POS_RESPONSE] = order_received;
+    break;
+  case READ_DEVICE: {
+    inBuffer[POS_RESPONSE] = order_received;
+    device = inBuffer[POS_DEVICE_ADDRESS];
+    int i;
+    for (i = 0; i < 4; i++) {
+      inBuffer[POS_DEVICE_ADDRESS + i] = i;
+    }
+    inBuffer[POS_DEVICE_ADDRESS + i + 1] = '>';
+    break;
+  }
+  default:
+    inBuffer[POS_RESPONSE] = ERROR;
+    return;
+  }
+
+}
+
+bool device_exists(int8_t addr) {
+  for (int i = 0; i < device_num; i++ ) {
+    if (device_list[i] == addr) { return(true); }
+  }
+  return(false);
+}
+
+void wait_for_bytes(int num_bytes, unsigned long timeout) {
+  startTime = millis();
+  //Wait for incoming bytes or exit if timeout
+  while ((Serial.available() < num_bytes) && (millis() - startTime < timeout)){}
+}
+
+int8_t read_i8() {
+  wait_for_bytes(1, 100); // Wait for 1 byte with a timeout of 100 ms
+  return (int8_t) Serial.read();
+}
+
+int16_t read_i16() {
+  int8_t buffer[2];
+  wait_for_bytes(2, 100); // Wait for 2 bytes with a timeout of 100 ms
+  return (((int16_t) buffer[0]) & 0xff) | (((int16_t) buffer[1]) << 8 & 0xff00);
+}
+
+int32_t read_i32() {
+  int8_t buffer[4];
+  wait_for_bytes(4, 200); // Wait for 4 bytes with a timeout of 200 ms
+  return (((int32_t) buffer[0]) & 0xff) | (((int32_t) buffer[1]) << 8 & 0xff00) | (((int32_t) buffer[2]) << 16 & 0xff0000) | (((int32_t) buffer[3]) << 24 & 0xff000000);
+}
+
+void write_i8(int8_t num) {
+  Serial.write(num);
+}
+
+void write_i16(int16_t num) {
+  int8_t buffer[2] = {(int8_t) (num & 0xff), (int8_t) (num >> 8)};
+  Serial.write((uint8_t*)&buffer, 2*sizeof(int8_t));
+}
+
+void write_i32(int32_t num) {
+  int8_t buffer[4] = {(int8_t) (num & 0xff), (int8_t) (num >> 8 & 0xff), (int8_t) (num >> 16 & 0xff), (int8_t) (num >> 24 & 0xff)};
+  Serial.write((uint8_t*)&buffer, 4*sizeof(int8_t));
+}

@@ -1,0 +1,17 @@
+    unsigned long currentMillis = millis();
+    if(currentMillis - previousMillis > interval) {
+      previousMillis = currentMillis;   
+      if (display_IR_flag == 1) {
+	centigrade_reading = mlx.readObjectTempC();
+      }
+      else {
+	int temp = read_conversion_result (0) ;
+	centigrade_reading = ((float) temp) * 0.0625;
+	start_conversion (0) ;
+      }
+      Serial.print(centigrade_reading);
+      Serial.println ("C") ;
+
+      if (centigrade_reading > temp_threshold) {
+	state = S_OVERHEAT;
+      }

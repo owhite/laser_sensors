@@ -1,0 +1,68 @@
+void loop() {
+  packetSize = Udp.parsePacket();
+  
+  if(packetSize>0) { 
+    Udp.read(packetBuffer, UDP_TX_PACKET_MAX_SIZE); 
+
+    if (datReq =="TWEET") { 
+    
+      Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+
+      Udp.print(IP_key);
+      Udp.print(COLON); 
+      Udp.print(IP_value);
+      Udp.print(DELIM); 
+
+      Udp.print(CMD_key);
+      Udp.print(COLON); 
+      Udp.print(datReq);
+      Udp.endPacket();
+    }
+
+
+    Udp.beginPacket(Udp.remoteIP(), Udp.remotePort());
+    Udp.print(IP_key); Udp.print(COLON); Udp.print(IP_value); Udp.print(DELIM); 
+    Udp.print("STATUS:UP"); Udp.print(DELIM); 
+    Udp.print(CMD_key); Udp.print(COLON); Udp.print(datReq);
+    Udp.endPacket();
+
+    String c = getValue(datReq, ' ', 0);
+    String command = getValue(datReq, ' ', 1);
+    String value1 = getValue(datReq, ' ', 2);
+    String value2 = getValue(datReq, ' ', 3);
+  
+    int v1 = -1;
+    int v2 = -1;
+
+    if (isNumeric(value1)) { v1 = value1.toInt(); }
+    if (isNumeric(value2)) { v2 = value2.toInt(); }
+
+    // commands must begin with '$'
+    if (c == '$') {
+      if (command.equals("set_relay")) {
+	// Serial.printf("setting relay %d :: %d\n", v1, v2);
+	v1--; // pin numbers start at zero, but using whole numbers for relays
+	if(v2 == 1) { digitalWrite(pins[v1], HIGH); }
+	if(v2 == 0) { digitalWrite(pins[v1], LOW);  }
+      }
+      if (command.equals("set_ports") && v1 != -1) {
+	// Serial.printf("setting ports %d\n", v1);
+	// recieve all your settings at once
+	//  e.g., $ set_ports 100100100100
+	int l = value1.length();
+	for(int i=0; i < l; i++){
+	  // love ternary operators
+	  digitalWrite(pins[i], (value1.charAt(i) == '1') ? HIGH : LOW);
+	}
+      }
+      if (command.equals("shut_down")) {
+	// Serial.printf("shutdown\n");
+	for(int i=0; i < OUTPUT_RANGE; i++){
+	  digitalWrite(pins[i], LOW);
+	}
+      }
+    }
+  }
+
+  memset(packetBuffer, 0, UDP_TX_PACKET_MAX_SIZE); //clear packetBuffer
+}

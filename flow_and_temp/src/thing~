@@ -1,0 +1,340 @@
+// this tests mechanism to assign an IP address
+// it used the flow_and_temp board, hence the LED_PINs
+
+#include <Adafruit_NeoPixel.h>
+#include <OneWire.h>
+#include <i2c_t3.h>
+#include <SPI.h>
+#include <laser_systems.h>
+#include <Sound.h>
+#include <Throb.h>
+#include "RunningAverage.h"
+
+#define S_IDLE                1
+#define S_REPORT              2
+#define S_ALARM               3
+#define S_MAKE_ACTIVATE_SOUND 8
+#define S_DEACTIVATE_SOUND    9
+
+#define PALETTE_RANGE 56
+
+#define PBPin         1
+#define SPK_PIN       5
+#define LED_PIN       15
+#define NP_PIN        16
+#define TEMP_PIN      17
+#define WATER_PIN     18
+
+#define SPKRPIN 5
+#define NUM_LEDS      24
+#define SERIAL_SPEED  115200
+
+String inputString = "";
+char returnBuf[100];
+
+boolean blinkOn = false;
+uint32_t blinkDelta = 0;
+uint32_t blinkInterval = 200; 
+uint32_t blinkNow;
+
+int state = S_IDLE;
+int alarm_state = false;
+
+int LEDring_pos = 0;
+int palette_index = 0;
+int blinker = 1;
+
+int PB; 
+float centigrade_reading;
+unsigned long currentMillis;
+int current_water_count = 0;
+int water_count = 0;
+int update_loop_count = 0;
+int loop_count = 0;
+
+long previousMillis = 0;  
+long interval = 1000; // wait time between sampling temperature input
+
+int RPM_lower = 10;
+int RPM_upper = 80;
+int RPM_threshold = 20;
+int temp_lower = 20;
+int temp_upper = 25;
+int temp_threshold = 25;
+int make_noise_flag = 1;
+int display_IR_flag = 0; 
+int display_RPM_lower = 10;
+int display_RPM_upper = 80;
+
+int brightness = 100;
+
+byte addr[2][8];
+
+int temperature_palette[PALETTE_RANGE + 1][3]={
+  {0,0,255},
+  {0,2,255},
+  {0,18,255},
+  {0,34,255},
+  {0,50,255},
+  {0,68,255},
+  {0,84,255},
+  {0,100,255},
+  {0,116,255},
+  {0,132,255},
+  {0,148,255},
+  {0,164,255},
+  {0,180,255},
+  {0,196,255},
+  {0,212,255},
+  {0,228,255},
+  {0,255,244},
+  {0,255,208},
+  {0,255,168},
+  {0,255,131},
+  {0,255,92},
+  {0,255,54},
+  {0,255,16},
+  {23,255,0},
+  {62,255,0},
+  {101,255,0},
+  {138,255,0},
+  {176,255,0},
+  {215,255,0},
+  {253,255,0},
+  {255,250,0},
+  {255,240,0},
+  {255,230,0},
+  {255,220,0},
+  {255,210,0},
+  {255,200,0},
+  {255,190,0},
+  {255,180,0},
+  {255,170,0},
+  {255,160,0},
+  {255,150,0},
+  {255,140,0},
+  {255,130,0},
+  {255,120,0},
+  {255,110,0},
+  {255,100,0},
+  {255,90,0},
+  {255,80,0},
+  {255,70,0},
+  {255,60,0},
+  {255,50,0},
+  {255,40,0},
+  {255,30,0},
+  {255,20,0},
+  {255,10,0},
+  {255,0,0},
+  {255,0,0}
+};
+
+OneWire ds(TEMP_PIN);
+
+Adafruit_NeoPixel ring = Adafruit_NeoPixel(NUM_LEDS, NP_PIN, NEO_GRB + NEO_KHZ800);
+
+Sound sound(SPK_PIN);
+Throb throb(LED_PIN);
+
+// asynchrounous start conversion
+int start_conversion (byte i) {
+  ds.reset () ;
+  ds.select (addr[i]) ;
+  ds.write (0x44) ;         // with parasite power on
+}
+
+// asynchrounous read result
+int read_conversion_result (byte i) {
+  byte present = ds.reset () ;
+  ds.select (addr[i]) ;    
+  ds.write (0xBE) ;         // Read Scratchpad
+
+  byte data[9];
+  // for (byte i = 0 ; i < 9 ; i++) { // gathers 9 bites. 
+  for (byte i = 0 ; i < 6 ; i++) { // gathers 9 bites. 
+    data[i] = ds.read();
+  }
+  int temp = (data [1] << 8) | data[0] ;   // just want temperature
+  return temp ;
+}
+
+// map 'n modulo
+// the native map function has weird behaviors
+// this thing returns better values when they're in the range
+// and it handles if the input value is >= in_max || <= in_min
+long mapNmodulo(long x, long in_min, long in_max, long out_min, long out_max) {
+  long r = (x - in_min) * (out_max - out_min + 1) / (in_max - in_min + 1) + out_min;
+
+  if (x >= in_max) r = out_max; 
+  if (x <= in_min) r = out_min;
+  return (r);
+}
+
+void calc_loop_speed() {
+  if (water_count > 0) {
+    // map
+    update_loop_count = mapNmodulo(water_count, RPM_lower, RPM_upper,
+				   display_RPM_lower, display_RPM_upper);
+
+    // then reverse
+    update_loop_count = display_RPM_upper - update_loop_count;
+  }
+}
+
+void update_LEDring() {
+  int x = mapNmodulo(centigrade_reading, temp_lower, temp_upper, 0, PALETTE_RANGE);
+
+  for( int i = 0; i < NUM_LEDS; i++) {
+    ring.setPixelColor(i, ring.Color(temperature_palette[x][0],
+				     temperature_palette[x][1],
+				     temperature_palette[x][2]));;
+  }
+  for (int i = 0; i < 4; i++) {
+    ring.setPixelColor((i + LEDring_pos) % NUM_LEDS, ring.Color(0,0,0));
+  }
+
+  ring.show(); 
+
+  calc_loop_speed();
+
+  // bump it if it's looped enough
+  if (loop_count > update_loop_count && water_count != 0) { 
+    LEDring_pos += 1;
+    loop_count = 0;
+  }
+
+  loop_count++;
+  if (LEDring_pos > NUM_LEDS) { LEDring_pos = 0; }
+}
+
+void danger_flash() {
+  for( int i = 0; i < NUM_LEDS; i++) {
+    if (blinker == 1) {
+      int x = mapNmodulo(centigrade_reading, temp_lower, temp_upper, 0, PALETTE_RANGE);
+      ring.setPixelColor(i, ring.Color(temperature_palette[x][0],
+				       temperature_palette[x][1],
+				       temperature_palette[x][2]));;
+    }
+    else {
+      ring.setPixelColor(i, ring.Color(0,0,0));
+    }
+    ring.show(); 
+  }
+}
+
+void isrService() {
+  cli();
+  current_water_count += 1;
+  sei();
+}
+
+void setup() {
+  
+  Serial.begin(SERIAL_SPEED);
+
+  pinMode(PBPin, INPUT);
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(WATER_PIN, INPUT); 
+
+  attachInterrupt(WATER_PIN, isrService, FALLING);
+
+  start_conversion (0) ;
+  delay( 2000 ); // power-up safety delay
+  int temp = read_conversion_result (0) ;
+  centigrade_reading = ((float) temp) * 0.0625;
+  start_conversion (0) ;
+
+  ring.begin(); 
+  ring.setBrightness( brightness );
+  
+  ds.search (addr[0]);
+  ds.reset_search () ;
+}
+
+void receiveDataPacket(size_t howMany){
+  masterCommand = Wire.read();          
+
+  inputSize = howMany;
+  inputBuf[0] = '\n';
+  int i;
+  for (i = 0; i < howMany - 1; i++) {
+    inputBuf[i] = Wire.read();
+    if (i > 19) { break; }
+  }
+  inputBuf[i+1] = '\n';
+
+  switch (masterCommand) {
+  case CMD_DONOTHING:
+    state = S_IDLE;
+    break;
+  case CMD_REPORT:
+    state = S_REPORT;
+    break;
+  case CMD_ACTIVATE:
+    state = S_MAKE_ACTIVATE_SOUND;
+    break;
+  case CMD_DEACTIVATE:
+    state = S_DEACTIVATE_SOUND;
+    break;
+  default:
+    // unknown state
+    break;
+  }
+
+  masterCommand = CMD_DONOTHING;    
+}
+
+void requestEvent() { Wire.write(outputBuf,PACKET_LEN); }
+
+void loop() {
+  currentMillis = millis();
+  if(currentMillis - previousMillis > interval) {
+    // get values from detectors
+    previousMillis = currentMillis;   
+    int temp = read_conversion_result (0) ;
+    centigrade_reading = ((float) temp) * 0.0625;
+    start_conversion (0) ;
+
+    water_count = current_water_count;
+    current_water_count = 0;
+    blinker *= -1;
+  }
+  throb.pulse();
+
+  // send centigrade_reading, water_count
+  outputBuf[0] = PACKET_START;   outputBuf[5] = PACKET_STOP;
+  outputBuf[1] = highByte((int) centigrade_reading);
+  outputBuf[2] = lowByte((int) centigrade_reading);
+  outputBuf[3] = highByte(water_count);
+  outputBuf[4] = lowByte(water_count);
+
+  switch (state) {
+  case S_IDLE:
+    state = S_IDLE;
+    break;
+  case S_REPORT:
+    Serial.printf("REPORT: %d :: %d\n", masterCommand, inputSize);
+    for(int i = 0; i < inputSize; i++) {
+      Serial.printf("%d", inputBuf[i]);
+    }
+    Serial.println();
+    state = S_IDLE;
+    break;
+  case S_MAKE_ACTIVATE_SOUND:
+    sound.wonky_screwdriver();
+    state = S_IDLE;
+    break;
+  case S_ALARM:
+    danger_flash();
+    break;
+  case S_DEACTIVATE_SOUND:
+    sound.tweetOFF();
+    state = S_IDLE;
+    break;
+  default:
+    // unknown state
+    break;
+  }
+
+}

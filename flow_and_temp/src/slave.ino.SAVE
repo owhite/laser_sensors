@@ -1,0 +1,270 @@
+// Slave / master command communications:
+//  http://www.berryjam.eu/2014/07/advanced-arduino-i2c-communication/
+
+#include <i2c_t3.h>
+#include <OneWire.h>
+#include <Sound.h>
+#include <Throb.h>
+#include "RunningAverage.h"
+#include <laser_systems.h>
+
+#define S_IDLE                1
+#define S_REPORT              2
+#define S_MAKE_ACTIVATE_SOUND 8
+#define S_DEACTIVATE_SOUND    9
+
+#define MCU_PIN 14
+#define LED_PIN    13
+#define SPK_PIN    5
+#define NP_PIN        10
+#define TEMP_PIN      17
+#define WATER_PIN     21
+
+#define NUM_LEDS      24
+#define PALETTE_RANGE 56
+
+// byte drawingMemory[NUM_LEDS*3];         //  3 bytes per LED
+// DMAMEM byte displayMemory[NUM_LEDS*12]; // 12 bytes per LED
+
+int temperature_palette[]={
+  0x0000FF, 0x0002FF, 0x0012FF, 0x0022FF, 0x0032FF, 0x0044FF, 0x0054FF, 
+  0x0064FF, 0x0074FF, 0x0084FF, 0x0094FF, 0x00A4FF, 0x00B4FF, 0x00C4FF, 
+  0x00D4FF, 0x00E4FF, 0x00FFF4, 0x00FFD0, 0x00FFA8, 0x00FF83, 0x00FF5C, 
+  0x00FF36, 0x00FF10, 0x17FF00, 0x3EFF00, 0x65FF00, 0x8AFF00, 0xB0FF00, 
+  0xD7FF00, 0xFDFF00, 0xFFFA00, 0xFFF000, 0xFFE600, 0xFFDC00, 0xFFD200, 
+  0xFFC800, 0xFFBE00, 0xFFB400, 0xFFAA00, 0xFFA000, 0xFF9600, 0xFF8C00, 
+  0xFF8200, 0xFF7800, 0xFF6E00, 0xFF6400, 0xFF5A00, 0xFF5000, 0xFF4600, 
+  0xFF3C00, 0xFF3200, 0xFF2800, 0xFF1E00, 0xFF1400, 0xFF0A00, 0xFF0000, 
+  0xFF0000
+};
+
+int temp;
+float centigrade_reading;
+unsigned long currentMillis;
+long previousMillis = 0;  
+long interval = 1000; 
+
+int current_water_count = 0;
+int water_count = 0;
+int update_loop_count = 0;
+int loop_count = 0;
+
+int state = S_IDLE;
+
+int LEDring_pos = 0;
+int palette_index = 0;
+int blinker = 1;
+
+int RPM_lower = 10;
+int RPM_upper = 80;
+int RPM_threshold = 20;
+int temp_lower = 20;
+int temp_upper = 25;
+int temp_threshold = 25;
+int make_noise_flag = 1;
+int display_IR_flag = 0; 
+int display_RPM_lower = 10;
+int display_RPM_upper = 80;
+
+int brightness = 100;
+
+byte addr[2][8];
+
+// WS2812Serial leds(NUM_LEDS, displayMemory, drawingMemory, NP_PIN, WS2812_GRB);
+Sound sound(SPK_PIN);
+Throb throb(LED_PIN);
+OneWire ds(TEMP_PIN);
+
+// asynchrounous start conversion
+int start_conversion (byte i) {
+  ds.reset () ;
+  ds.select (addr[i]) ;
+  ds.write (0x44) ;         // with parasite power on
+}
+
+// asynchrounous read result
+int read_conversion_result (byte i) {
+  byte present = ds.reset () ;
+  ds.select (addr[i]) ;    
+  ds.write (0xBE) ;         // Read Scratchpad
+
+  byte data[9];
+  // for (byte i = 0 ; i < 9 ; i++) { // gathers 9 bites. 
+  for (byte i = 0 ; i < 6 ; i++) { // gathers 9 bites. 
+    data[i] = ds.read();
+  }
+  int temp = (data [1] << 8) | data[0] ;   // just want temperature
+  return temp ;
+}
+
+// map 'n modulo
+// the native map function has weird behaviors
+// this thing returns better values when they're in the range
+// and it handles if the input value is >= in_max || <= in_min
+long mapNmodulo(long x, long in_min, long in_max, long out_min, long out_max) {
+  long r = (x - in_min) * (out_max - out_min + 1) / (in_max - in_min + 1) + out_min;
+
+  if (x >= in_max) r = out_max; 
+  if (x <= in_min) r = out_min;
+  return (r);
+}
+
+void calc_loop_speed() {
+  if (water_count > 0) {
+    // map
+    update_loop_count = mapNmodulo(water_count, RPM_lower, RPM_upper,
+				   display_RPM_lower, display_RPM_upper);
+
+    // then reverse
+    update_loop_count = display_RPM_upper - update_loop_count;
+  }
+}
+
+void update_LEDring() {
+  int x = mapNmodulo(centigrade_reading, temp_lower, temp_upper, 0, PALETTE_RANGE);
+
+  for( int i = 0; i < NUM_LEDS; i++) {
+    // leds.setPixel(i, temperature_palette[x]);
+  }
+  for (int i = 0; i < 4; i++) {
+    // leds.setPixel(i, 0);
+  }
+
+  // leds.show(); 
+
+  calc_loop_speed();
+
+  // bump it if it's looped enough
+  if (loop_count > update_loop_count && water_count != 0) { 
+    LEDring_pos += 1;
+    loop_count = 0;
+  }
+
+  loop_count++;
+  if (LEDring_pos > NUM_LEDS) { LEDring_pos = 0; }
+}
+
+void danger_flash() {
+  for( int i = 0; i < NUM_LEDS; i++) {
+    if (blinker == 1) {
+      int x = mapNmodulo(centigrade_reading, temp_lower, temp_upper, 0, PALETTE_RANGE);
+      // leds.setPixel(i, temperature_palette[x]);
+    }
+    else {
+      // leds.setPixel(i, 0);
+    }
+    // leds.show(); 
+  }
+}
+
+void receiveDataPacket(size_t howMany){
+  masterCommand = Wire.read();          
+
+  inputSize = howMany;
+  inputBuf[0] = '\n';
+  int i;
+  for (i = 0; i < howMany - 1; i++) {
+    inputBuf[i] = Wire.read();
+    if (i > 19) { break; }
+  }
+  inputBuf[i+1] = '\n';
+
+  switch (masterCommand) {
+  case CMD_DONOTHING:
+    state = S_IDLE;
+    break;
+  case CMD_REPORT:
+    state = S_REPORT;
+    break;
+  case CMD_ACTIVATE:
+    state = S_MAKE_ACTIVATE_SOUND;
+    break;
+  case CMD_DEACTIVATE:
+    state = S_DEACTIVATE_SOUND;
+    break;
+  default:
+    // unknown state
+    break;
+  }
+
+  masterCommand = CMD_DONOTHING;    
+  lastReceive = millis();
+}
+
+void requestEvent() { Wire.write(outputBuf,PACKET_LEN);   lastReceive = millis(); }
+
+void isrService() {
+  cli();
+  current_water_count += 1;
+  sei();
+}
+
+void setup() {
+  Serial.begin(SERIAL_SPEED);
+
+  attachInterrupt(WATER_PIN, isrService, FALLING);
+
+  pinMode(MCU_PIN, OUTPUT);
+  digitalWrite(MCU_PIN, LOW);
+
+  Wire.begin(I2C_SLAVE, FLOW_SLAVE_ADDRESS, I2C_PINS_18_19,
+	     I2C_PULLUP_EXT, 400000);
+  Wire.onReceive(receiveDataPacket); 
+  Wire.onRequest(requestEvent);
+
+  ds.search (addr[0]);
+  ds.reset_search () ;
+
+}
+
+
+void loop() {
+  throb.pulseOnTimer(lastReceive);
+
+  currentMillis = millis();
+  if(currentMillis - previousMillis > interval) {
+    previousMillis = currentMillis;   
+    water_count = current_water_count;
+    current_water_count = 0;
+
+    temp = read_conversion_result(0);
+    centigrade_reading = ((float) temp) * 0.0625;
+    start_conversion (0) ;
+
+    char str[6]; 
+    dtostrf(centigrade_reading, 5, 3, str );
+
+    outputBuf[0] = PACKET_START;   outputBuf[5] = PACKET_STOP;
+    outputBuf[1] = 7; outputBuf[2] = 7;
+    outputBuf[1] = ((str[0] - 48) * 10) + (str[1] - 48);
+    outputBuf[2] = ((str[3] - 48) * 10) + (str[4] - 48);
+    outputBuf[3] = lowByte(water_count);
+    outputBuf[4] = highByte(water_count);
+
+    outputBuf[1] = 11;
+    outputBuf[2] = 22;
+
+  }
+
+  switch (state) {
+  case S_IDLE:
+    state = S_IDLE;
+    break;
+  case S_REPORT:
+    Serial.printf("REPORT: %d\n", water_count);
+    Serial.println();
+    state = S_IDLE;
+    break;
+  case S_MAKE_ACTIVATE_SOUND:
+    sound.star_trek1();
+    state = S_IDLE;
+    break;
+  case S_DEACTIVATE_SOUND:
+    sound.tweetOFF();
+    state = S_IDLE;
+    break;
+  default:
+    // unknown state
+    break;
+  }
+}

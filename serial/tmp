@@ -1,0 +1,19 @@
+import serial
+import time
+
+HELLO             = 0x01
+ALREADY_CONNECTED = 0x02
+SHUTDOWN          = 0x03
+ERROR             = 0x04
+WRITE_DEVICE      = 0x05
+READ_DEVICE       = 0x06
+SET_DEVICE        = 0x07
+
+port = '/dev/cu.usbmodem3896411'
+s = serial.Serial(port, 115200, timeout=0.1)
+s.write(bytearray(['<',HELLO,'>']))
+time.sleep(.01)
+msg = bytearray(s.read(s.inWaiting()))
+
+for b in msg:
+   print b
