@@ -1,12 +1,10 @@
-// this program is used with a teensy that monitors load cells. The load cells
-// detect if something is pushing on a laser optic and complains if there
-// is too much pressure. The program also rotates a stepper motor when the user
-// hits a switch.
-// Slave / master command communications:
-//  http://www.berryjam.eu/2014/07/advanced-arduino-i2c-communication/
+// slave to monitor load cells. load cells detect if something
+//   is pushing on a laser optic and complains if there
+//   is too much pressure. The program also rotates a stepper motor when the user
+//   hits a switch.
 
 #include <i2c_t3.h>
-#include "RunningAverage.h"
+#include <RunningAverage.h>
 #include <SPI.h>
 #include <laser_systems.h>
 #include <Sound.h>
@@ -23,10 +21,32 @@
 #define S_DEACTIVATE_SOUND    9
 #define S_REPORT              10
 
-#define FORWARD 1
-#define REVERSE 3
+#define FORWARD    1
+#define REVERSE    3
 
-int Status_value = 0;
+#define MCU_PIN    13
+#define LED_PIN    14
+#define DIR_PIN    2
+#define STEP_PIN   3
+#define GECKOENBL  4
+#define SPKR_PIN   9
+#define PB_PIN     6
+
+#define LED1_r     5
+#define LED1_g     8
+#define LED2_r     23
+#define LED2_g     22
+#define LED3_r     21
+#define LED3_g     20
+
+#define SW_PIN1    10
+#define SW_PIN2    11
+
+#define LC_PIN1    15
+#define LC_PIN2    16
+#define LC_PIN3    17
+
+
 int state = S_IDLE;
 int auto_motor_run_time = 0;
 int motorCount = 0;
@@ -35,13 +55,11 @@ int decayTime = 0;
 int direction = 0;
 int LC1 = 0; int LC2 = 0; int LC3 = 0;
 
-
 // sampling parameters
 int RAsamples = 500;        // number of samples in rolling buffer
 int delta = 18;             // degree of change in rolling buffer to prompt a response
 int averageThreshold = 30;  // must be over this level to be counted
 int touchThreshold =   80;  // level where lights go green
-
 int compressed_counter = 0;
 
 // parameters used to ramp up the motor slowly. 
@@ -67,30 +85,7 @@ int sw1; // measure the switch status
 int sw2; 
 int pb;
 
-#define MCU_PIN 13
-#define LED_PIN    14
-int DirPin     = 2;
-int StepPin    = 3;
-int GeckoEnbl  = 4;
-
-int SpkrPin    = 9;
-int PBPin      = 6;
-
-int LED1_r     = 5;
-int LED1_g     = 8;
-int LED2_r     = 23;
-int LED2_g     = 22;
-int LED3_r     = 21;
-int LED3_g     = 20;
-
-int SWPin1     = 10;
-int SWPin2     = 11;
-
-int LCPin1     = 15; 
-int LCPin2     = 16; 
-int LCPin3     = 17; 
-
-Sound sound(SpkrPin);
+Sound sound(SPKR_PIN);
 Throb throb(LED_PIN);
 
 // silence the squealer from talking
@@ -167,13 +162,13 @@ void setup() {
   pinMode(MCU_PIN, OUTPUT);
   digitalWrite(MCU_PIN, LOW);
 
-  pinMode(SWPin1, INPUT);
-  pinMode(SWPin2, INPUT);
-  pinMode(PBPin, INPUT);
-  pinMode(StepPin, OUTPUT);
-  pinMode(GeckoEnbl, OUTPUT);
-  pinMode(StepPin, OUTPUT);
-  pinMode(DirPin, OUTPUT);
+  pinMode(SW_PIN1, INPUT);
+  pinMode(SW_PIN2, INPUT);
+  pinMode(PB_PIN, INPUT);
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(GECKOENBL, OUTPUT);
+  pinMode(STEP_PIN, OUTPUT);
+  pinMode(DIR_PIN, OUTPUT);
   pinMode(LED1_r, OUTPUT);
   pinMode(LED1_g, OUTPUT);
   pinMode(LED2_r, OUTPUT);
@@ -181,16 +176,15 @@ void setup() {
   pinMode(LED3_r, OUTPUT);
   pinMode(LED3_g, OUTPUT);
 
-  digitalWrite(StepPin, HIGH);
-  digitalWrite(DirPin, HIGH);
-  digitalWrite(GeckoEnbl, LOW);
+  digitalWrite(STEP_PIN, HIGH);
+  digitalWrite(DIR_PIN, HIGH);
+  digitalWrite(GECKOENBL, LOW);
   digitalWrite(LED1_r, HIGH);
   digitalWrite(LED1_g, HIGH);
   digitalWrite(LED2_r, HIGH);
   digitalWrite(LED2_g, HIGH);
   digitalWrite(LED3_r, HIGH);
   digitalWrite(LED3_g, HIGH);
-
 }
 
 void receiveDataPacket(size_t howMany){
@@ -199,6 +193,8 @@ void receiveDataPacket(size_t howMany){
   inputSize = howMany;
   inputBuf[0] = '\0';
   int i;
+  // inputbuf not used
+  //  we're just being polite by collecting data
   for (i = 0; i < howMany - 1; i++) {
     inputBuf[i] = Wire.read();
     if (i > 19) { break; }
@@ -208,6 +204,10 @@ void receiveDataPacket(size_t howMany){
   switch (masterCommand) {
   case CMD_DONOTHING:
     state = S_IDLE;
+    break;
+  case CMD_RESET:
+    badnewssinceQuery = 0; // keep sending a complaint until master
+    state = S_IDLE;        //  sends a reset
     break;
   case CMD_REPORT:
     state = S_REPORT;
@@ -231,7 +231,6 @@ void requestEvent() {
   outputBuf[1] = badnewssinceQuery;
   Wire.write(outputBuf,PACKET_LEN); 
   lastReceive = millis();
-  badnewssinceQuery = 0;
 }
 
 void loop() {
@@ -241,9 +240,8 @@ void loop() {
   outputBuf[1] = 0;  outputBuf[2] = 0;
   outputBuf[3] = 0;  outputBuf[4] = 0;
 
-
-  sw1 = digitalRead(SWPin1);
-  sw2 = digitalRead(SWPin2);
+  sw1 = digitalRead(SW_PIN1);
+  sw2 = digitalRead(SW_PIN2);
   if (state != S_MOTOR_RUN) {
     if (sw1 == HIGH) {
       delay(20);
@@ -261,13 +259,13 @@ void loop() {
   case S_MOTOR_INIT:
     if (direction == FORWARD) {
       LED_GO(LED3_r, LED3_g);
-      digitalWrite(DirPin, rotR);
+      digitalWrite(DIR_PIN, rotR);
     }
     if (direction == REVERSE) {
       LED_GO(LED1_r, LED1_g);
-      digitalWrite(DirPin, rotF);
+      digitalWrite(DIR_PIN, rotF);
     }
-    digitalWrite(GeckoEnbl, HIGH); // fire up the motor driver
+    digitalWrite(GECKOENBL, HIGH); // fire up the motor driver
     motorCount = 0;
     decayN = float(startDelay);
     decayTime = 0;
@@ -282,9 +280,9 @@ void loop() {
       decayTime = finalDelay;
     }
 
-    digitalWrite(StepPin, HIGH);
+    digitalWrite(STEP_PIN, HIGH);
     delayMicroseconds(decayTime); 
-    digitalWrite(StepPin, LOW);
+    digitalWrite(STEP_PIN, LOW);
     delayMicroseconds(decayTime); 
     motorCount += 1;
     if (sw1 != HIGH && sw2 != HIGH) {
@@ -295,13 +293,13 @@ void loop() {
   case S_AUTO_MOTOR_INIT:
     if (direction == FORWARD) {
       LED_GO(LED3_r, LED3_g);
-      digitalWrite(DirPin, rotR);
+      digitalWrite(DIR_PIN, rotR);
     }
     if (direction == REVERSE) {
       LED_GO(LED1_r, LED1_g);
-      digitalWrite(DirPin, rotF);
+      digitalWrite(DIR_PIN, rotF);
     }
-    digitalWrite(GeckoEnbl, HIGH); // fire up the motor driver
+    digitalWrite(GECKOENBL, HIGH); // fire up the motor driver
     motorCount = 0;
     decayN = float(startDelay);
     decayTime = 0;
@@ -317,9 +315,9 @@ void loop() {
     }
     motorCount += 1;
 
-    digitalWrite(StepPin, HIGH);
+    digitalWrite(STEP_PIN, HIGH);
     delayMicroseconds(decayTime); 
-    digitalWrite(StepPin, LOW);
+    digitalWrite(STEP_PIN, LOW);
     delayMicroseconds(decayTime); 
 
     auto_motor_run_time -= 1;
@@ -331,11 +329,11 @@ void loop() {
     break;
 
   case S_CALIBRATE:
-    // I HAVE DEACTIVATED CALIBRATE. MUST FIX BY TESTING STATUS OF PB_pin
+    // ** CALIBRATE IS DEACTIVATED. MUST FIX BY TESTING STATUS OF PB_PIN **
 
     auto_motor_run_time = 0;
     // see if load cells are receiving a certain amount of pressure. 
-    LC1 = analogRead(LCPin1);  LC2 = analogRead(LCPin2);  LC3 = analogRead(LCPin3);
+    LC1 = analogRead(LC_PIN1);  LC2 = analogRead(LC_PIN2);  LC3 = analogRead(LC_PIN3);
 
     if (LC1 > touchThreshold) { // go green when above threshold amount
       LED_GO(LED1_r, LED1_g);
@@ -346,14 +344,14 @@ void loop() {
     if (LC3 > touchThreshold) {
       LED_GO(LED3_r, LED3_g);
     }
-    pb = digitalRead(PBPin);
+    pb = digitalRead(PB_PIN);
     if (pb != HIGH) {
       state = S_IDLE;
     }
     break;
   case S_MOTOR_OFF:
     auto_motor_run_time = 0;
-    digitalWrite(GeckoEnbl, LOW);
+    digitalWrite(GECKOENBL, LOW);
     LED_OFF(LED1_r, LED1_g);
     LED_OFF(LED3_r, LED3_g);
     delayMicroseconds(400000); // snooze before ending
@@ -361,7 +359,7 @@ void loop() {
     break;
   case S_IDLE:
     // read what the load cells are doing and complain if needed
-    LC1 = analogRead(LCPin1);  LC2 = analogRead(LCPin2);  LC3 = analogRead(LCPin3);
+    LC1 = analogRead(LC_PIN1);  LC2 = analogRead(LC_PIN2);  LC3 = analogRead(LC_PIN3);
 
     RA1.addValue(LC1);  RA2.addValue(LC2);  RA3.addValue(LC3);
 
@@ -372,7 +370,7 @@ void loop() {
       // the magic numbers in tone have to do with the range of the load cells
       //  and the range of audible tones coming out of the speaker
       if (silenceFlag == 0) {
-	tone(SpkrPin, map(LC1, 50, 1000, 2000, 6000));  // make noise
+	tone(SPKR_PIN, map(LC1, 50, 1000, 2000, 6000));  // make noise
       }
       compressed_counter++;
       LED_STOP(LED1_r, LED1_g);
@@ -381,7 +379,7 @@ void loop() {
 	     RA2.getAverage() > averageThreshold) {
 
       if (silenceFlag == 0) {
-	tone(SpkrPin, map(LC2, 50, 1000, 2000, 6000));
+	tone(SPKR_PIN, map(LC2, 50, 1000, 2000, 6000));
       }
       compressed_counter++;
       LED_STOP(LED2_r, LED2_g);
@@ -390,14 +388,14 @@ void loop() {
 	     RA3.getAverage() > averageThreshold) {
 
       if (silenceFlag == 0) {
-	tone(SpkrPin, map(LC3, 50, 1000, 2000, 6000));
+	tone(SPKR_PIN, map(LC3, 50, 1000, 2000, 6000));
       }
       compressed_counter++;
       LED_STOP(LED3_r, LED3_g);
     }
     else {
       // no problem, no noise
-      noTone(SpkrPin);
+      noTone(SPKR_PIN);
       LED_OFF(LED1_r, LED1_g); LED_OFF(LED2_r, LED2_g); LED_OFF(LED3_r, LED3_g);
     }
 
