@@ -1,41 +1,23 @@
-// Slave / master command communications:
-//  http://www.berryjam.eu/2014/07/advanced-arduino-i2c-communication/
+// this slave measures blips coming from flow sensor and reads temperature
 
 #include <i2c_t3.h>
 #include <Sound.h>
 #include <Throb.h>
-#include "RunningAverage.h"
 #include <laser_systems.h>
 
-#define S_IDLE                1
-#define S_REPORT              2
-#define S_MAKE_ACTIVATE_SOUND 8
-#define S_DEACTIVATE_SOUND    9
+// states defined from commands that come in from master
+#define S_IDLE                1 // no action required
+#define S_MAKE_ACTIVATE_SOUND 8 // make sound when master requests it
+#define S_DEACTIVATE_SOUND    9 // make a different sound when master requests it
 
 #define MCU_PIN 14
 #define LED_PIN    13
 #define SPK_PIN    5
-#define NP_PIN        10
 #define TEMP_PIN      17
 #define WATER_PIN     21
 
 #define NUM_LEDS      24
 #define PALETTE_RANGE 56
-
-// byte drawingMemory[NUM_LEDS*3];         //  3 bytes per LED
-// DMAMEM byte displayMemory[NUM_LEDS*12]; // 12 bytes per LED
-
-int temperature_palette[]={
-  0x0000FF, 0x0002FF, 0x0012FF, 0x0022FF, 0x0032FF, 0x0044FF, 0x0054FF, 
-  0x0064FF, 0x0074FF, 0x0084FF, 0x0094FF, 0x00A4FF, 0x00B4FF, 0x00C4FF, 
-  0x00D4FF, 0x00E4FF, 0x00FFF4, 0x00FFD0, 0x00FFA8, 0x00FF83, 0x00FF5C, 
-  0x00FF36, 0x00FF10, 0x17FF00, 0x3EFF00, 0x65FF00, 0x8AFF00, 0xB0FF00, 
-  0xD7FF00, 0xFDFF00, 0xFFFA00, 0xFFF000, 0xFFE600, 0xFFDC00, 0xFFD200, 
-  0xFFC800, 0xFFBE00, 0xFFB400, 0xFFAA00, 0xFFA000, 0xFF9600, 0xFF8C00, 
-  0xFF8200, 0xFF7800, 0xFF6E00, 0xFF6400, 0xFF5A00, 0xFF5000, 0xFF4600, 
-  0xFF3C00, 0xFF3200, 0xFF2800, 0xFF1E00, 0xFF1400, 0xFF0A00, 0xFF0000, 
-  0xFF0000
-};
 
 int temp;
 float centigrade_reading;
@@ -45,93 +27,13 @@ long interval = 1000;
 
 int current_water_count = 0;
 int water_count = 0;
-int update_loop_count = 0;
-int loop_count = 0;
 
 int state = S_IDLE;
 
-int LEDring_pos = 0;
-int palette_index = 0;
-int blinker = 1;
-
-int RPM_lower = 10;
-int RPM_upper = 80;
-int RPM_threshold = 20;
-int temp_lower = 20;
-int temp_upper = 25;
-int temp_threshold = 25;
-int make_noise_flag = 1;
-int display_IR_flag = 0; 
-int display_RPM_lower = 10;
-int display_RPM_upper = 80;
-
-int brightness = 100;
-
 byte addr[2][8];
 
-// WS2812Serial leds(NUM_LEDS, displayMemory, drawingMemory, NP_PIN, WS2812_GRB);
 Sound sound(SPK_PIN);
 Throb throb(LED_PIN);
-
-// map 'n modulo
-// the native map function has weird behaviors
-// this thing returns better values when they're in the range
-// and it handles if the input value is >= in_max || <= in_min
-long mapNmodulo(long x, long in_min, long in_max, long out_min, long out_max) {
-  long r = (x - in_min) * (out_max - out_min + 1) / (in_max - in_min + 1) + out_min;
-
-  if (x >= in_max) r = out_max; 
-  if (x <= in_min) r = out_min;
-  return (r);
-}
-
-void calc_loop_speed() {
-  if (water_count > 0) {
-    // map
-    update_loop_count = mapNmodulo(water_count, RPM_lower, RPM_upper,
-				   display_RPM_lower, display_RPM_upper);
-
-    // then reverse
-    update_loop_count = display_RPM_upper - update_loop_count;
-  }
-}
-
-void update_LEDring() {
-  int x = mapNmodulo(centigrade_reading, temp_lower, temp_upper, 0, PALETTE_RANGE);
-
-  for( int i = 0; i < NUM_LEDS; i++) {
-    // leds.setPixel(i, temperature_palette[x]);
-  }
-  for (int i = 0; i < 4; i++) {
-    // leds.setPixel(i, 0);
-  }
-
-  // leds.show(); 
-
-  calc_loop_speed();
-
-  // bump it if it's looped enough
-  if (loop_count > update_loop_count && water_count != 0) { 
-    LEDring_pos += 1;
-    loop_count = 0;
-  }
-
-  loop_count++;
-  if (LEDring_pos > NUM_LEDS) { LEDring_pos = 0; }
-}
-
-void danger_flash() {
-  for( int i = 0; i < NUM_LEDS; i++) {
-    if (blinker == 1) {
-      int x = mapNmodulo(centigrade_reading, temp_lower, temp_upper, 0, PALETTE_RANGE);
-      // leds.setPixel(i, temperature_palette[x]);
-    }
-    else {
-      // leds.setPixel(i, 0);
-    }
-    // leds.show(); 
-  }
-}
 
 void receiveDataPacket(size_t howMany){
   masterCommand = Wire.read();          
@@ -143,14 +45,11 @@ void receiveDataPacket(size_t howMany){
     inputBuf[i] = Wire.read();
     if (i > 19) { break; }
   }
-  inputBuf[i+1] = '\0';
+  inputBuf[i+1] = '\0'; // guess what? we dont use inputBuf
 
   switch (masterCommand) {
   case CMD_DONOTHING:
     state = S_IDLE;
-    break;
-  case CMD_REPORT:
-    state = S_REPORT;
     break;
   case CMD_ACTIVATE:
     state = S_MAKE_ACTIVATE_SOUND;
@@ -167,8 +66,10 @@ void receiveDataPacket(size_t howMany){
   lastReceive = millis();
 }
 
+// always send data, regardless of state
 void requestEvent() {Wire.write(outputBuf,PACKET_LEN); lastReceive = millis();}
 
+// dis bumpy dee counter for the water flow
 void isrService() {
   cli();
   current_water_count += 1;
@@ -229,11 +130,6 @@ void loop() {
 
   switch (state) {
   case S_IDLE:
-    state = S_IDLE;
-    break;
-  case S_REPORT:
-    Serial.printf("REPORT: %d\n", water_count);
-    Serial.println();
     state = S_IDLE;
     break;
   case S_MAKE_ACTIVATE_SOUND:
