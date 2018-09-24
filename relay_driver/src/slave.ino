@@ -1,19 +1,22 @@
+// this slave sends signals to a bank of relays
+// slave only receives input. no output is sent back
+// one requirement - it shuts off all relays unless it
+//  it receives a periodic signal from master
+
 #include <i2c_t3.h>
 #include <Sound.h>
 #include <Throb.h>
-#include "RunningAverage.h"
 #include <laser_systems.h>
 
 #define S_IDLE                1
-#define S_REPORT              2
 #define S_SETPINS             3
 #define S_MAKE_ACTIVATE_SOUND 8
 #define S_SHUTDOWN            9
 
-#define SPK_PIN 20
-#define MCU_PIN 14
-#define LED_PIN 13
-#define OUTPUT_RANGE 12
+#define SPK_PIN      20
+#define MCU_PIN      14
+#define LED_PIN      13
+#define OUTPUT_RANGE 12 // total number of relays
 
 int state = S_IDLE;
 
@@ -35,9 +38,6 @@ void receiveDataPacket(size_t howMany){
   switch (masterCommand) {
   case CMD_DONOTHING:
     state = S_IDLE;
-    break;
-  case CMD_REPORT:
-    state = S_REPORT;
     break;
   case CMD_SETPINS:
     state = S_SETPINS;
@@ -82,6 +82,7 @@ void setup() {
 
 void loop() {
   if (throb.pulseOnTimer(lastReceive) == false) {
+    // no signal, then shut off all relays
     for(int i=0; i < OUTPUT_RANGE; i++){
       digitalWrite(i, LOW);
     }
@@ -92,19 +93,14 @@ void loop() {
     state = S_IDLE;
     break;
   case S_SETPINS:
+    // input buf has to be the right length
+    // to set the pins
     if (OUTPUT_RANGE + 1 == inputSize) {
       for(int i = 0; i < inputSize; i++) {
+	// inputbuf has to have the right values to set LED
 	digitalWrite(i, (inputBuf[i] == 1) ? HIGH : LOW);
       }
     }
-    state = S_IDLE;
-    break;
-  case S_REPORT:
-    Serial.printf("REPORT: %d :: %d\n", masterCommand, inputSize);
-    for(int i = 0; i < inputSize; i++) {
-      Serial.printf("%d", inputBuf[i]);
-    }
-    Serial.println();
     state = S_IDLE;
     break;
   case S_MAKE_ACTIVATE_SOUND:
@@ -112,6 +108,7 @@ void loop() {
     state = S_IDLE;
     break;
   case S_SHUTDOWN:
+    // the master can also send a shutdown
     sound.tweetOFF();
     for(int i=0; i < OUTPUT_RANGE; i++){
       digitalWrite(i, LOW);
