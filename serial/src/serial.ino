@@ -24,8 +24,8 @@
 #define DEVICE_ADDRESS 2 // this position is address of device
 #define DEVICE_SEND    3 // starting byte for data returned by devices
 
-#define MCU_PIN    13
-#define LED_PIN    14
+#define MCU_PIN    23
+#define LED_PIN    22
 
 const uint8_t numChars = 24;
 uint32_t lastReceive   = 0;
@@ -43,13 +43,16 @@ uint8_t device = 0;
 Throb throb(LED_PIN);
 
 void setup(){
-  Serial.begin(SERIAL_BAUD);
+  Serial1.begin(SERIAL_BAUD);
 
   Wire.begin(I2C_MASTER, 0x00, I2C_PINS_18_19, I2C_PULLUP_EXT, 400000);
   Wire.setDefaultTimeout(200000); 
 
   pinMode(MCU_PIN, OUTPUT); // if this teensy is woke, then turn this on
   digitalWrite(MCU_PIN, LOW);
+
+  pinMode(LED_PIN, OUTPUT); // if this teensy is woke, then turn this on
+  digitalWrite(LED_PIN, LOW);
 }
 
 boolean packetReceived() {
@@ -57,8 +60,8 @@ boolean packetReceived() {
   packetLen = 0;
 
   // incoming packets can be of variable length
-  while (Serial.available() > 0) {
-    uint8_t rc = Serial.read();
+  while (Serial1.available() > 0) {
+    uint8_t rc = Serial1.read();
     if (idx > numChars - 1) {
       idx = 0;
     }
@@ -144,10 +147,10 @@ void loop(){
 	packetLen = 4;
       }
       else { // ok
-	Wire.read(serialBuf, Wire.available());
+	Wire.read(deviceBuf, Wire.available());
 	serialBuf[RESPONSE + 1] = 1;
 	for (i = 0; i < PACKET_LEN; i++) { // returned packet is always same fixed length
-	  serialBuf[DEVICE_ADDRESS + i + 1] = i;
+	  serialBuf[DEVICE_ADDRESS + i + 1] = deviceBuf[i];
 	  serialBuf[DEVICE_ADDRESS + i + 2] = '>'; 
 	}
 	packetLen += i; // ** ?? BE SURE TO CHECK: SHOULD THIS NOT BE += i + 1 ?? **
@@ -162,7 +165,7 @@ void loop(){
 
     // only writes back to master if a packet was received
     //  to avoid filling up the master's serial buffer
-    Serial.write((uint8_t*) serialBuf, packetLen); 
+    Serial1.write((uint8_t*) serialBuf, packetLen); 
     // hopefully master will not send packets unless bridge says it's up
     //  to avoid filling up the bridge's serial buffer
   }
