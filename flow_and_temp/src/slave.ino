@@ -5,28 +5,29 @@
 #include <Throb.h>
 #include <laser_systems.h>
 
+// temp caclulated based on two points between 16 - 23 degrees
+// y = mx + b 
+// y = (x/12) - (53 / 3) = (x / 12) - 17.66666
+// where x is the analog reading of the temp probe
+
 // states defined from commands that come in from master
 #define S_IDLE                1 // no action required
 #define S_MAKE_ACTIVATE_SOUND 8 // make sound when master requests it
 #define S_DEACTIVATE_SOUND    9 // make a different sound when master requests it
 
-#define MCU_PIN 14
-#define LED_PIN    13
-#define SPK_PIN    5
-#define TEMP_PIN      17
-#define WATER_PIN     21
+#define MCU_PIN        14
+#define LED_PIN        13
+#define SPK_PIN         5
+#define TEMP_PIN       17
+#define WATER_PIN      21
 
-#define NUM_LEDS      24
-#define PALETTE_RANGE 56
-
-int temp;
-float centigrade_reading;
 unsigned long currentMillis;
 long previousMillis = 0;  
 long interval = 1000; 
 
 int current_water_count = 0;
 int water_count = 0;
+float temp = 0.0;
 
 int state = S_IDLE;
 
@@ -76,16 +77,6 @@ void isrService() {
   sei();
 }
 
-double thermister(int RawADC) {
- double Temp;
- Temp = log(10000.0*((1024.0/RawADC-1))); 
- Temp = 1 / (0.001129148 + (0.000234125 + (0.0000000876741 * Temp * Temp ))* Temp );
- Temp = Temp - 273.15;            // Convert Kelvin to Celcius
- Temp = (Temp - 32)/ (9.0 / 5.0);
- return Temp;
-}
-
-
 void setup() {
   Serial.begin(SERIAL_SPEED);
 
@@ -109,23 +100,17 @@ void loop() {
     water_count = current_water_count;
     current_water_count = 0;
 
-    int val=analogRead(TEMP_PIN);
-    double temp = thermister(val); 
+    temp = analogRead(TEMP_PIN);
+    temp = (temp / 12.0) - 17.66666;
 
     char result[5];
     dtostrf(temp, 5, 2, result); 
 
     outputBuf[0] = PACKET_START;   outputBuf[5] = PACKET_STOP;
-    outputBuf[1] = 7; outputBuf[2] = 7;
-    outputBuf[1] = (result[0] * 10) + result[1];
-    outputBuf[2] = (result[3] * 10) + result[4];
+    outputBuf[1] = (((int) result[0] - 48) * 10) + (((int) result[1] - 48));
+    outputBuf[2] = (((int) result[3] - 48) * 10) + (((int) result[4] - 48));
     outputBuf[3] = lowByte(water_count);
     outputBuf[4] = highByte(water_count);
-
-    outputBuf[0] = PACKET_START;   outputBuf[5] = PACKET_STOP;
-    outputBuf[1] = 6; outputBuf[2] = 7;
-    outputBuf[3] = 8; outputBuf[4] = 9;
-
   }
 
   switch (state) {
