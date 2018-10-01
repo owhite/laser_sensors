@@ -209,10 +209,20 @@ void receiveDataPacket(size_t howMany){
     badnewssinceQuery = 0; // keep sending a complaint until master
     state = S_IDLE;        //  sends a reset
     break;
+  case CMD_SILENCE: 
+    if (silenceFlag == 0) {
+      state = S_DEACTIVATE_SOUND;
+    }
+    else {
+      state = S_MAKE_ACTIVATE_SOUND;
+    }
+    silenceFlag = !silenceFlag; // toggle
+    break;
   case CMD_REPORT:
     state = S_REPORT;
     break;
   case CMD_ACTIVATE:
+    silenceFlag = 0;
     state = S_MAKE_ACTIVATE_SOUND;
     break;
   case CMD_DEACTIVATE:
@@ -357,6 +367,7 @@ void loop() {
     delayMicroseconds(400000); // snooze before ending
     state = S_IDLE;
     break;
+
   case S_IDLE:
     // read what the load cells are doing and complain if needed
     LC1 = analogRead(LC_PIN1);  LC2 = analogRead(LC_PIN2);  LC3 = analogRead(LC_PIN3);
